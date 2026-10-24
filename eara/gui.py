@@ -1741,7 +1741,7 @@ class EarAWindow(Adw.ApplicationWindow):
         self._shutting_down = True
         power_off = power_off_on_exit()
         if self.device:
-            self.device.shutdown(power_off=power_off)
+            self.device.shutdown(power_off=power_off, disconnect=power_off)
         elif power_off:
             try:
                 bluez.power_off()

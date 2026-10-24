@@ -145,7 +145,7 @@ STRINGS = {
         "status_partial": "Bluetooth only",
         "status_offline": "Not connected",
         "power_off_exit": "Power off Bluetooth on exit",
-        "power_off_exit_hint": "When enabled, closing EarA disconnects the device and turns off the adapter.",
+        "power_off_exit_hint": "When enabled, closing EarA disconnects the device and turns off the adapter. When disabled, only the control channel closes and audio stays connected.",
     },
     "uk": {
         "app_title": "EarA",
@@ -281,7 +281,7 @@ STRINGS = {
         "status_partial": "Лише Bluetooth",
         "status_offline": "Не підключено",
         "power_off_exit": "Вимикати Bluetooth при виході",
-        "power_off_exit_hint": "Якщо увімкнено, при закритті EarA відключає пристрій та вимикає адаптер.",
+        "power_off_exit_hint": "Якщо увімкнено, при закритті EarA відключає пристрій та вимикає адаптер. Якщо вимкнено, закривається лише канал керування, а звук лишається підключеним.",
     },
 }
 

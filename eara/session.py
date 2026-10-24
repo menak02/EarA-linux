@@ -196,10 +196,16 @@ class Device:
         if self.address:
             bluez.disconnect(self.address)
 
-    def shutdown(self, *, power_off: bool = True) -> None:
-        """Drop RFCOMM, disconnect earbuds, and optionally power off the BT adapter."""
+    def shutdown(self, *, power_off: bool = True, disconnect: bool | None = None) -> None:
+        """Close RFCOMM and optionally disconnect the device / power off the adapter.
+
+        Closing the control channel alone does not drop A2DP, so by default the
+        device stays connected unless the caller asks for a full disconnect.
+        """
         self.close_control()
-        if self.address:
+        if disconnect is None:
+            disconnect = power_off
+        if disconnect and self.address:
             try:
                 bluez.disconnect(self.address)
             except Exception:

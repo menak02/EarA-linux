@@ -61,12 +61,22 @@ class SessionTests(unittest.TestCase):
         disconnect.assert_called_once_with("AA:BB:CC:DD:EE:FF")
         power_off.assert_called_once()
 
-    def test_shutdown_skips_power_off_when_disabled(self):
+    def test_shutdown_leaves_audio_connected_when_power_off_disabled(self):
+        device = Device("AA:BB:CC:DD:EE:FF", "Nothing Ear (a)")
+        with patch.object(device, "close_control") as close_ctl:
+            with patch.object(bluez, "disconnect") as disconnect:
+                with patch.object(bluez, "power_off") as power_off:
+                    device.shutdown(power_off=False)
+        close_ctl.assert_called_once()
+        disconnect.assert_not_called()
+        power_off.assert_not_called()
+
+    def test_shutdown_can_disconnect_without_power_off(self):
         device = Device("AA:BB:CC:DD:EE:FF", "Nothing Ear (a)")
         with patch.object(device, "close_control"):
             with patch.object(bluez, "disconnect") as disconnect:
                 with patch.object(bluez, "power_off") as power_off:
-                    device.shutdown(power_off=False)
+                    device.shutdown(power_off=False, disconnect=True)
         disconnect.assert_called_once_with("AA:BB:CC:DD:EE:FF")
         power_off.assert_not_called()
 
