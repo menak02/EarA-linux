@@ -29,6 +29,22 @@ class Model:
     find_my: bool = True
     personalized_anc: bool = False
     listening_mode: bool = False  # CMF Buds / Buds Pro 2 style
+    single_battery: bool = False  # one headset battery instead of L/R/case
+    over_ear: bool = False
+    protocol_version: bool = False  # send 0xC001 activation handshake
+    rfcomm_channels: tuple[int, ...] = (15,)
+    eq_family: str = "earbud"  # "earbud" (0xC01F) or "listening" (0xC050)
+    spatial_audio: bool = False
+    spatial_modes: tuple[str, ...] = ()
+    personal_sound: bool = False  # Audiodo / Mimi toggle
+    dual_connection: bool = False
+    dual_reboot: bool = False
+    gesture_profile: str = "earbud"  # "earbud" or "headphone"
+    gesture_device: int = 2
+    device_codecs: tuple[str, ...] = ()
+    codec_zero: str = "sbc"
+    custom_eq_peak_q: float = 0.66
+    ring_form: str = "earbud"  # "earbud", "headphone" or "ear1"
 
     def as_dict(self) -> dict:
         return {
@@ -49,6 +65,15 @@ class Model:
                 "find_my": self.find_my,
                 "personalized_anc": self.personalized_anc,
                 "listening_mode": self.listening_mode,
+                "single_battery": self.single_battery,
+                "over_ear": self.over_ear,
+                "spatial_audio": self.spatial_audio,
+                "spatial_modes": list(self.spatial_modes),
+                "personal_sound": self.personal_sound,
+                "dual_connection": self.dual_connection,
+                "gesture_profile": self.gesture_profile,
+                "eq_family": self.eq_family,
+                "device_codecs": list(self.device_codecs),
             },
         }
 
@@ -137,6 +162,31 @@ MODELS_BY_BASE: dict[str, Model] = {
         in_ear=False,
         ear_tip_fit=False,
     ),
+    "B175": Model(
+        name="CMF Headphone Pro",
+        base="B175",
+        family="forretress",
+        adaptive_anc=True,
+        advanced_eq=False,
+        bass_enhance=False,
+        in_ear=False,
+        ear_tip_fit=False,
+        single_battery=True,
+        over_ear=True,
+        protocol_version=True,
+        rfcomm_channels=(28, 15),
+        eq_family="listening",
+        spatial_audio=True,
+        spatial_modes=("off", "concert", "theatre"),
+        personal_sound=True,
+        dual_connection=True,
+        gesture_profile="headphone",
+        gesture_device=6,
+        device_codecs=("aac", "ldac"),
+        codec_zero="aac",
+        custom_eq_peak_q=0.7,
+        ring_form="headphone",
+    ),
 }
 
 # Serial SKU fragment → model base. First two digits of many serials.
@@ -183,6 +233,9 @@ def model_from_serial(serial: str | None) -> Model:
 def model_from_name(name: str) -> Model:
     value = (name or "").lower()
     mapping = [
+        ("cmf headphone pro", "B175"),
+        ("cmf by nothing headphone", "B175"),
+        ("cmf headphone", "B175"),
         ("ear (a)", "B162"),
         ("ear(a)", "B162"),
         ("ear (open)", "B174"),

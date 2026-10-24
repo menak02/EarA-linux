@@ -44,8 +44,11 @@ def looks_like_nothing(name: str) -> bool:
         for k in (
             "nothing ear",
             "nothing cmf",
+            "nothing headphone",
+            "cmf by nothing",
             "cmf buds",
             "cmf neck",
+            "cmf headphone",
             "ear (a)",
             "ear(a)",
             "ear (1)",
@@ -299,26 +302,39 @@ def disconnect(address: str) -> None:
     dbus_disconnect(address)
 
 
-def open_rfcomm(address: str, timeout: float = 8) -> socket.socket:
+def open_rfcomm(
+    address: str,
+    timeout: float = 8,
+    channels: tuple[int, ...] | None = None,
+) -> socket.socket:
+    """Open the NT LINK control port.
+
+    Earbuds use channel 15; over-ear models (B175) expose the same UUID on
+    channel 28. Try the model's channels in order and move on when a channel
+    is refused.
+    """
     last: Optional[OSError] = None
-    for attempt in range(8):
-        sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
-        sock.settimeout(timeout)
-        try:
-            sock.connect((address, RFCOMM_CHANNEL))
-            return sock
-        except OSError as exc:
-            last = exc
+    for channel in channels or (RFCOMM_CHANNEL,):
+        for attempt in range(8):
+            sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+            sock.settimeout(timeout)
             try:
-                sock.close()
-            except OSError:
-                pass
-            if exc.errno in (16, 11, 115, 110):  # EBUSY, EAGAIN, ETIMEDOUT
-                if attempt in (2, 5):
-                    scan_for_device(address, dwell=4.0)
-                time.sleep(0.7 + attempt * 0.35)
-                continue
-            raise
+                sock.connect((address, channel))
+                return sock
+            except OSError as exc:
+                last = exc
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+                if exc.errno in (111, 112):  # ECONNREFUSED / EHOSTUNREACH
+                    break
+                if exc.errno in (16, 11, 115, 110):  # EBUSY, EAGAIN, ETIMEDOUT
+                    if attempt in (2, 5):
+                        scan_for_device(address, dwell=4.0)
+                    time.sleep(0.7 + attempt * 0.35)
+                    continue
+                raise
     assert last is not None
     raise last
 
@@ -334,5 +350,8 @@ def permission_hint(exc: OSError) -> str:
     if exc.errno == 16:
         return "Control channel busy (PulseAudio). Retry in a second."
     if exc.errno in (111, 112):
-        return "Earbuds asleep or out of range. Take them out of the case."
+        return (
+            "Device asleep or out of range. Wake it "
+            "(earbuds out of the case, headphones powered on)."
+        )
     return str(exc)

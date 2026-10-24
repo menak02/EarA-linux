@@ -15,12 +15,16 @@ from eara import __version__, bluez
 from eara import SUPPORT_URL
 from eara.i18n import load_lang, power_off_on_exit, set_lang, set_power_off_on_exit, t
 from eara.protocol import (
+    EQ_PRESETS_B175,
     GESTURE_ACTIONS,
     GESTURE_TYPES,
     GRAPHIC_HZ,
+    HEADPHONE_GESTURE_SLOTS,
     LISTENING_MODES,
+    SPATIAL_MODES_B175,
     format_ear_tip,
     merge_gestures,
+    merge_headphone_gestures,
 )
 from eara.session import Device
 
@@ -671,6 +675,19 @@ def _gesture_action_label(action: str) -> str:
     return text if text != key else action.replace("-", " ").title()
 
 
+def _preset_label(key: str) -> str:
+    text = t(key)
+    return text if text != key else key.replace("_", " ").title()
+
+
+def _gesture_type_label(gtype: str) -> str:
+    spec = HEADPHONE_GESTURE_SLOTS.get(gtype)
+    if spec is not None:
+        return t(str(spec["label"]))
+    text = t(gtype)
+    return text if text != gtype else gtype.replace("-", " ").title()
+
+
 def _mask_serial(value: str) -> str:
     text = (value or "").strip()
     if len(text) <= 6:
@@ -749,6 +766,8 @@ class EarAWindow(Adw.ApplicationWindow):
         self._eq_local = False
         self._codec_keys: list[str] = ["sbc"]
         self._listening_keys: list[str] = list(LISTENING_MODES.keys())
+        self._spatial_keys: list[str] = list(SPATIAL_MODES_B175.keys())
+        self._ignore_spatial = False
         self.toast = Adw.ToastOverlay()
         load_lang()
         _ensure_fonts()
@@ -890,12 +909,13 @@ class EarAWindow(Adw.ApplicationWindow):
 
         batt_row = Gtk.FlowBox()
         batt_row.set_selection_mode(Gtk.SelectionMode.NONE)
-        batt_row.set_max_children_per_line(3)
+        batt_row.set_max_children_per_line(4)
         batt_row.set_column_spacing(8)
         batt_row.set_row_spacing(8)
         batt_row.add_css_class("eara-status-batteries")
+        self.batt_row = batt_row
         self._batt_cells: dict[str, dict[str, Gtk.Widget]] = {}
-        for key, short in (("left", "L"), ("right", "R"), ("case", "C")):
+        for key, short in (("left", "L"), ("right", "R"), ("case", "C"), ("headset", "H")):
             batt_row.append(self._battery_cell(key, short))
         self.status_card.append(batt_row)
 
@@ -1011,7 +1031,7 @@ class EarAWindow(Adw.ApplicationWindow):
         self.status_dot.remove_css_class("eara-dot-ok")
         self.status_dot.remove_css_class("eara-dot-warn")
         self.status_dot.add_css_class("eara-dot-off" if offline else "eara-dot-warn")
-        for key in ("left", "right", "case"):
+        for key in ("left", "right", "case", "headset"):
             self._update_battery_cell(key, None)
         self.chip_anc.set_text("")
         self.chip_eq.set_text("")
@@ -1089,16 +1109,32 @@ class EarAWindow(Adw.ApplicationWindow):
         self.row_lat, self.lat_switch, self.lbl_lat = _toggle_row(t("latency"))
         self.row_adv, self.adv_switch, self.lbl_adv = _toggle_row(t("adv_eq"))
         self.row_panc, self.panc_switch, self.lbl_panc = _toggle_row(t("personal_anc"))
+        self.row_psound, self.psound_switch, self.lbl_psound = _toggle_row(t("personal_sound"))
+        self.row_dual, self.dual_switch, self.lbl_dual = _toggle_row(t("dual_connection"))
         self.bass_switch.connect("notify::active", lambda *_: self._on_toggle("bass"))
         self.ied_switch.connect("notify::active", lambda *_: self._on_toggle("ied"))
         self.lat_switch.connect("notify::active", lambda *_: self._on_toggle("lat"))
         self.adv_switch.connect("notify::active", lambda *_: self._on_toggle("adv"))
         self.panc_switch.connect("notify::active", lambda *_: self._on_toggle("panc"))
+        self.psound_switch.connect("notify::active", lambda *_: self._on_toggle("psound"))
+        self.dual_switch.connect("notify::active", lambda *_: self._on_toggle("dual"))
         toggles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         toggles.add_css_class("eara-toggles")
-        for row in (self.row_bass, self.row_ied, self.row_lat, self.row_adv, self.row_panc):
+        for row in (
+            self.row_bass,
+            self.row_ied,
+            self.row_lat,
+            self.row_adv,
+            self.row_panc,
+            self.row_psound,
+            self.row_dual,
+        ):
             toggles.append(row)
         quick_card.append(toggles)
+
+        self.lbl_dual_peers = _ui_text(Gtk.Label(wrap=True, xalign=0))
+        self.lbl_dual_peers.add_css_class("dim-label")
+        quick_card.append(self.lbl_dual_peers)
 
         self.listening_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.lbl_listening = _ui_text(Gtk.Label(xalign=0))
@@ -1109,6 +1145,16 @@ class EarAWindow(Adw.ApplicationWindow):
         self.listening_box.append(self.lbl_listening)
         self.listening_box.append(listening_row)
         quick_card.append(self.listening_box)
+
+        self.spatial_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.lbl_spatial = _ui_text(Gtk.Label(xalign=0))
+        spatial_row = Gtk.Box(spacing=8)
+        self.spatial_drop = Gtk.DropDown.new_from_strings(["off"])
+        self.spatial_drop.connect("notify::selected", self._on_spatial_changed)
+        spatial_row.append(self.spatial_drop)
+        self.spatial_box.append(self.lbl_spatial)
+        self.spatial_box.append(spatial_row)
+        quick_card.append(self.spatial_box)
 
         self.lbl_noise = _ui_text(Gtk.Label(xalign=0))
         self.lbl_noise.add_css_class("eara-noise-label")
@@ -1142,12 +1188,8 @@ class EarAWindow(Adw.ApplicationWindow):
         eq = Gtk.FlowBox(max_children_per_line=2, selection_mode=Gtk.SelectionMode.NONE)
         self.eq_flow = eq
         self.eq_buttons: dict[str, Gtk.Button] = {}
-        for key in ("balanced", "more_bass", "more_treble", "voice"):
-            b = Gtk.Button()
-            b.add_css_class("eara-chip")
-            b.connect("clicked", lambda *_, k=key: self._run(lambda: self._require().set_eq(k)))
-            self.eq_buttons[key] = b
-            eq.append(b)
+        self.eq_keys: tuple[str, ...] = ("balanced", "more_bass", "more_treble", "voice")
+        self._rebuild_eq_buttons(self.eq_keys)
         eq_card.append(eq)
         self.lbl_custom = _ui_text(Gtk.Label(xalign=0, wrap=True))
         eq_card.append(self.lbl_custom)
@@ -1196,39 +1238,87 @@ class EarAWindow(Adw.ApplicationWindow):
         box.set_margin_end(16)
         self.lbl_gestures = _ui_text(Gtk.Label(wrap=True, xalign=0))
         box.append(self.lbl_gestures)
-        self.gesture_rows: list[tuple[str, str, Gtk.DropDown, Gtk.Label, Gtk.Button, Gtk.Label]] = []
-        self._gesture_action_keys = list(GESTURE_ACTIONS.keys())
-        action_labels = [_gesture_action_label(key) for key in self._gesture_action_keys]
-        for side in ("left", "right"):
-            side_lab = _ui_text(Gtk.Label(xalign=0))
-            side_lab.add_css_class("eara-gesture-side")
-            box.append(side_lab)
-            for gtype in GESTURE_TYPES:
-                drop = Gtk.DropDown.new_from_strings(action_labels)
-                lab = _ui_text(Gtk.Label(label=gtype, xalign=0, hexpand=True))
-                lab.add_css_class("eara-gesture-type")
-                save = Gtk.Button()
-                save.add_css_class("eara-chip")
-                save.connect(
-                    "clicked",
-                    lambda *_, s=side, tpe=gtype, d=drop: self._save_gesture(s, tpe, d),
-                )
-                row = Gtk.Box(spacing=8)
-                row.add_css_class("eara-gesture-row")
-                row.append(lab)
-                row.append(drop)
-                row.append(save)
-                box.append(row)
-                self.gesture_rows.append((side, gtype, drop, lab, save, side_lab))
-        self._sync_gesture_dropdowns(merge_gestures({"left": {}, "right": {}}))
+        self.gesture_container = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.append(self.gesture_container)
+        self.gesture_rows: list[dict] = []
+        self._gesture_profile: str | None = None
+        self._rebuild_gesture_rows("earbud")
         return Gtk.ScrolledWindow(child=box)
 
+    def _clear_gesture_rows(self) -> None:
+        child = self.gesture_container.get_first_child()
+        while child is not None:
+            self.gesture_container.remove(child)
+            child = self.gesture_container.get_first_child()
+        self.gesture_rows = []
+
+    def _rebuild_gesture_rows(self, profile: str) -> None:
+        if profile == self._gesture_profile:
+            return
+        self._clear_gesture_rows()
+        self._gesture_profile = profile
+        groups: list[tuple[str, str, list[tuple[str, str, tuple[str, ...]]]]] = []
+        if profile == "headphone":
+            rows = [
+                (slot, t(str(spec["label"])), tuple(spec["actions"]))
+                for slot, spec in HEADPHONE_GESTURE_SLOTS.items()
+            ]
+            groups.append(("controls", t("controls").upper(), rows))
+        else:
+            rows = [
+                (gtype, _gesture_action_label(gtype), tuple(GESTURE_ACTIONS.keys()))
+                for gtype in GESTURE_TYPES
+            ]
+            for side in ("left", "right"):
+                groups.append((side, t(side).upper(), rows))
+        for group, title, rows in groups:
+            group_lab = _ui_text(Gtk.Label(xalign=0))
+            group_lab.add_css_class("eara-gesture-side")
+            group_lab.set_text(title)
+            self.gesture_container.append(group_lab)
+            for gtype, label, actions in rows:
+                drop = Gtk.DropDown.new_from_strings([_gesture_action_label(a) for a in actions])
+                lab = _ui_text(Gtk.Label(label=label, xalign=0, hexpand=True))
+                lab.add_css_class("eara-gesture-type")
+                save = Gtk.Button(label=t("set"))
+                save.add_css_class("eara-chip")
+                row = {
+                    "group": group,
+                    "gtype": gtype,
+                    "drop": drop,
+                    "label": lab,
+                    "save": save,
+                    "group_label": group_lab,
+                    "actions": actions,
+                }
+                save.connect("clicked", lambda *_, r=row: self._save_gesture(r))
+                line = Gtk.Box(spacing=8)
+                line.add_css_class("eara-gesture-row")
+                line.append(lab)
+                line.append(drop)
+                line.append(save)
+                self.gesture_container.append(line)
+                self.gesture_rows.append(row)
+        if profile == "headphone":
+            self._sync_gesture_dropdowns(merge_headphone_gestures({"controls": {}}))
+        else:
+            self._sync_gesture_dropdowns(merge_gestures({"left": {}, "right": {}}))
+        label_key = "tab_controls" if profile == "headphone" else "tab_gestures"
+        if hasattr(self, "_tab_buttons") and "gestures" in self._tab_buttons:
+            self._tab_buttons["gestures"].set_label(t(label_key))
+            self._stack_pages[2].set_title(t(label_key))
+        if hasattr(self, "lbl_gestures"):
+            self.lbl_gestures.set_text(
+                t("controls_hint" if profile == "headphone" else "gestures_hint")
+            )
+
     def _sync_gesture_dropdowns(self, gestures: dict) -> None:
-        for side, gtype, drop, *_rest in self.gesture_rows:
-            action = (gestures.get(side) or {}).get(gtype, "no-action")
-            if action not in self._gesture_action_keys:
-                action = "no-action"
-            drop.set_selected(self._gesture_action_keys.index(action))
+        for row in self.gesture_rows:
+            actions = row["actions"]
+            action = (gestures.get(row["group"]) or {}).get(row["gtype"], "no-action")
+            if action not in actions:
+                action = "no-action" if "no-action" in actions else actions[0]
+            row["drop"].set_selected(actions.index(action))
 
     def _page_tools(self) -> Gtk.Widget:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1312,7 +1402,9 @@ class EarAWindow(Adw.ApplicationWindow):
         self.btn_refresh.set_label(t("refresh"))
         self.btn_about.set_tooltip_text(t("about"))
         self.lbl_tag.set_text(t("brand_tag"))
-        titles = ("tab_device", "tab_sound", "tab_gestures", "tab_tools")
+        titles = ["tab_device", "tab_sound", "tab_gestures", "tab_tools"]
+        if self._gesture_profile == "headphone":
+            titles[2] = "tab_controls"
         for key, title_key in zip(self._tab_keys, titles):
             self._tab_buttons[key].set_label(t(title_key))
         for page, key in zip(self._stack_pages, titles):
@@ -1338,22 +1430,33 @@ class EarAWindow(Adw.ApplicationWindow):
         self.lbl_lat.set_text(t("latency"))
         self.lbl_adv.set_text(t("adv_eq"))
         self.lbl_panc.set_text(t("personal_anc"))
+        self.lbl_psound.set_text(t("personal_sound"))
+        self.lbl_dual.set_text(t("dual_connection"))
         self.lbl_listening.set_text(t("listening_mode"))
         listening_labels = [t(f"listening_{mode}") for mode in LISTENING_MODES]
         self._listening_keys = list(LISTENING_MODES.keys())
         self.listening_drop.set_model(Gtk.StringList.new(listening_labels))
+        self.lbl_spatial.set_text(t("spatial_audio"))
+        self.spatial_drop.set_model(
+            Gtk.StringList.new([t(f"spatial_{mode}") for mode in self._spatial_keys])
+        )
         for mode, btn in self.anc_buttons.items():
             btn.set_label(t(mode))
         for key, btn in self.eq_buttons.items():
-            btn.set_label(t(key))
-        self.lbl_gestures.set_text(t("gestures_hint"))
+            btn.set_label(_preset_label(key))
+        self.lbl_gestures.set_text(
+            t("controls_hint" if self._gesture_profile == "headphone" else "gestures_hint")
+        )
         seen = set()
-        for side, _gtype, drop, _lab, save, side_lab in self.gesture_rows:
-            save.set_label(t("set"))
-            if side not in seen:
-                side_lab.set_text(t(side).upper())
-                seen.add(side)
-            drop.set_model(Gtk.StringList.new([_gesture_action_label(k) for k in self._gesture_action_keys]))
+        for row in self.gesture_rows:
+            row["save"].set_label(t("set"))
+            if row["group"] not in seen:
+                row["group_label"].set_text(t(row["group"]).upper())
+                seen.add(row["group"])
+            row["label"].set_text(_gesture_type_label(row["gtype"]))
+            row["drop"].set_model(
+                Gtk.StringList.new([_gesture_action_label(k) for k in row["actions"]])
+            )
         gestures = (getattr(self, "_last", None) or {}).get("gestures")
         if isinstance(gestures, dict):
             self._sync_gesture_dropdowns(gestures)
@@ -1398,6 +1501,14 @@ class EarAWindow(Adw.ApplicationWindow):
         if 0 <= idx < len(self._listening_keys):
             mode = self._listening_keys[idx]
             self._run(lambda: self._require().set_listening_mode(mode))
+
+    def _on_spatial_changed(self, *_args) -> None:
+        if self._busy or self._ignore_spatial:
+            return
+        idx = int(self.spatial_drop.get_selected())
+        if 0 <= idx < len(self._spatial_keys):
+            mode = self._spatial_keys[idx]
+            self._run(lambda: self._require().set_spatial_audio(mode))
 
     def _fill_devices(self) -> None:
         devices = bluez.paired_devices()
@@ -1498,9 +1609,11 @@ class EarAWindow(Adw.ApplicationWindow):
         name = keys[idx] if 0 <= idx < len(keys) else "sbc"
         self._run(lambda: self._do_codec(name))
 
-    def _save_gesture(self, side: str, gtype: str, drop: Gtk.DropDown) -> None:
-        selected = int(drop.get_selected())
-        self._run(lambda: self._do_gesture(side, gtype, selected))
+    def _save_gesture(self, row: dict) -> None:
+        selected = int(row["drop"].get_selected())
+        actions = row["actions"]
+        action = actions[selected] if 0 <= selected < len(actions) else actions[0]
+        self._run(lambda: self._do_gesture(row["group"], row["gtype"], action))
 
     def _busy_widgets(self) -> list:
         widgets: list = [
@@ -1519,17 +1632,20 @@ class EarAWindow(Adw.ApplicationWindow):
             self.btn_stop_ring,
             self.btn_fit,
             self.listening_drop,
+            self.spatial_drop,
         ]
         widgets.extend(self.anc_buttons.values())
         widgets.extend(self.eq_buttons.values())
-        for _side, _gtype, drop, _lab, save, _side_lab in self.gesture_rows:
-            widgets.extend((drop, save))
+        for row in self.gesture_rows:
+            widgets.extend((row["drop"], row["save"]))
         for switch in (
             self.bass_switch,
             self.ied_switch,
             self.lat_switch,
             self.adv_switch,
             self.panc_switch,
+            self.psound_switch,
+            self.dual_switch,
             self.power_off_switch,
         ):
             widgets.append(switch)
@@ -1661,9 +1777,8 @@ class EarAWindow(Adw.ApplicationWindow):
             raise RuntimeError(str(result.get("error")))
         self._last = self.device.status() if self.device else {}
 
-    def _do_gesture(self, side: str, gtype: str, selected: int) -> None:
-        action = self._gesture_action_keys[selected]
-        self._require().set_gesture(side, gtype, action)
+    def _do_gesture(self, group: str, gtype: str, action: str) -> None:
+        self._require().set_gesture(group, gtype, action)
         self._last = self._require().status()
 
     def _do_fit(self) -> None:
@@ -1700,6 +1815,8 @@ class EarAWindow(Adw.ApplicationWindow):
             "lat": self.lat_switch.get_active(),
             "adv": self.adv_switch.get_active(),
             "panc": self.panc_switch.get_active(),
+            "psound": self.psound_switch.get_active(),
+            "dual": self.dual_switch.get_active(),
         }[which]
         self._run(lambda: self._toggle(which, enabled))
 
@@ -1715,6 +1832,10 @@ class EarAWindow(Adw.ApplicationWindow):
             ear.set_advanced_eq(enabled)
         elif which == "panc":
             ear.set_personalized_anc(enabled)
+        elif which == "psound":
+            ear.set_personal_sound(enabled)
+        elif which == "dual":
+            ear.set_dual_connection(enabled)
         self._last = ear.status()
 
     def _set_chip_active(self, buttons: dict[str, Gtk.Button], active: str | None) -> None:
@@ -1733,13 +1854,35 @@ class EarAWindow(Adw.ApplicationWindow):
             else:
                 btn.remove_css_class("eara-chip-active")
 
+    def _rebuild_eq_buttons(self, keys: tuple[str, ...]) -> None:
+        if keys == self.eq_keys and self.eq_buttons:
+            return
+        child = self.eq_flow.get_first_child()
+        while child is not None:
+            self.eq_flow.remove(child)
+            child = self.eq_flow.get_first_child()
+        self.eq_keys = keys
+        self.eq_buttons = {}
+        for key in keys:
+            button = Gtk.Button(label=_preset_label(key))
+            button.add_css_class("eara-chip")
+            button.connect("clicked", lambda *_, k=key: self._run(lambda: self._require().set_eq(k)))
+            self.eq_buttons[key] = button
+            self.eq_flow.append(button)
+
     def _apply_capabilities(self, caps: dict) -> None:
         self.row_bass.set_visible(bool(caps.get("bass_enhance")))
         self.row_ied.set_visible(bool(caps.get("in_ear", True)))
         self.row_lat.set_visible(bool(caps.get("low_latency", True)))
         self.row_adv.set_visible(bool(caps.get("advanced_eq", True)))
         self.row_panc.set_visible(bool(caps.get("personalized_anc")))
+        self.row_psound.set_visible(bool(caps.get("personal_sound")))
+        self.row_dual.set_visible(bool(caps.get("dual_connection")))
+        self.lbl_dual_peers.set_visible(
+            bool(caps.get("dual_connection")) and bool(self.lbl_dual_peers.get_text())
+        )
         self.listening_box.set_visible(bool(caps.get("listening_mode")))
+        self.spatial_box.set_visible(bool(caps.get("spatial_audio")))
         self.lbl_noise.set_visible(bool(caps.get("anc")))
         self.anc_flow.set_visible(bool(caps.get("anc")))
         self.lbl_eq.set_visible(bool(caps.get("eq_presets", True)))
@@ -1747,11 +1890,21 @@ class EarAWindow(Adw.ApplicationWindow):
         self.graphic_box.set_visible(bool(caps.get("custom_eq", True)))
         self.btn_apply_eq.set_visible(bool(caps.get("custom_eq", True)))
         self.lbl_custom.set_visible(bool(caps.get("custom_eq", True)))
+        single = bool(caps.get("single_battery"))
+        for key in ("left", "right", "case"):
+            self._batt_cells[key]["cell"].set_visible(not single)
+        self._batt_cells["headset"]["cell"].set_visible(single)
         find_visible = bool(caps.get("find_my", True))
-        self.btn_find_l.set_visible(find_visible)
-        self.btn_find_r.set_visible(find_visible)
+        self.btn_find_l.set_visible(find_visible and not single)
+        self.btn_find_r.set_visible(find_visible and not single)
         self.btn_find_both.set_visible(find_visible)
         self.btn_stop_ring.set_visible(find_visible)
+        family = caps.get("eq_family", "earbud")
+        self._rebuild_eq_buttons(
+            tuple(EQ_PRESETS_B175) if family == "listening" else ("balanced", "more_bass", "more_treble", "voice")
+        )
+        profile = str(caps.get("gesture_profile") or "earbud")
+        self._rebuild_gesture_rows(profile)
         gestures_tab = bool(caps.get("gestures", True))
         self._tab_buttons["gestures"].set_visible(gestures_tab)
         if not gestures_tab and self.stack.get_visible_child_name() == "gestures":
@@ -1803,7 +1956,7 @@ class EarAWindow(Adw.ApplicationWindow):
         serial = _mask_serial(str(serial_raw))
         self.status_meta.set_text(f"{headline} · {model} · fw {fw} · {serial}")
         battery = status.get("battery") or {}
-        for key in ("left", "right", "case"):
+        for key in ("left", "right", "case", "headset"):
             item = battery.get(key)
             self._update_battery_cell(key, item if isinstance(item, dict) else None)
         anc_name = status.get("anc")
@@ -1814,8 +1967,7 @@ class EarAWindow(Adw.ApplicationWindow):
         else:
             self.chip_anc.set_visible(False)
         if isinstance(eq_name, str) and eq_name:
-            eq_label = t(eq_name) if eq_name in ("balanced", "more_bass", "more_treble", "voice") else eq_name
-            self.chip_eq.set_text(f"EQ · {eq_label}")
+            self.chip_eq.set_text(f"EQ · {_preset_label(eq_name)}")
             self.chip_eq.set_visible(True)
         else:
             self.chip_eq.set_visible(False)
@@ -1839,6 +1991,10 @@ class EarAWindow(Adw.ApplicationWindow):
                 self.adv_switch.set_active(bool(status["advanced_eq"]))
             if status.get("personalized_anc") is not None:
                 self.panc_switch.set_active(bool(status["personalized_anc"]))
+            if status.get("personal_sound") is not None:
+                self.psound_switch.set_active(bool(status["personal_sound"]))
+            if status.get("dual_connection") is not None:
+                self.dual_switch.set_active(bool(status["dual_connection"]))
         finally:
             self._ignore_toggle = False
         listening = status.get("listening")
@@ -1848,6 +2004,24 @@ class EarAWindow(Adw.ApplicationWindow):
                 self.listening_drop.set_selected(self._listening_keys.index(listening))
             finally:
                 self._ignore_listening = False
+        peers = status.get("dual_devices") or []
+        peer_lines = []
+        for peer in peers:
+            if not isinstance(peer, dict):
+                continue
+            name = str(peer.get("name") or peer.get("mac") or "")
+            mark = " ●" if peer.get("connected") else ""
+            if name:
+                peer_lines.append(name + mark)
+        self.lbl_dual_peers.set_text(", ".join(peer_lines))
+        self.lbl_dual_peers.set_visible(bool(peer_lines) and bool(caps.get("dual_connection")))
+        spatial = status.get("spatial")
+        if isinstance(spatial, str) and spatial in self._spatial_keys:
+            self._ignore_spatial = True
+            try:
+                self.spatial_drop.set_selected(self._spatial_keys.index(spatial))
+            finally:
+                self._ignore_spatial = False
         graphic = status.get("graphic_eq")
         if isinstance(graphic, list) and not self._eq_local:
             for scale, value in zip(self.eq_bands, graphic):
@@ -1855,26 +2029,21 @@ class EarAWindow(Adw.ApplicationWindow):
         audio_info = status.get("audio") or {}
         options = list(audio_info.get("codecs") or [])
         keys = [str(item.get("key") or "sbc") for item in options] or ["sbc"]
-        advertised = {str(item.get("key") or "") for item in options}
-        self.lbl_codec_hint.set_text(
-            t("codec_hint") if "lhdc" in advertised else t("codec_no_lhdc")
-        )
+        current = (audio_info.get("codec") or "").lower().replace("-", "_")
         if keys != self._codec_keys:
             self._codec_keys = keys
             selected = int(self.codec_drop.get_selected())
             self.codec_drop.set_model(Gtk.StringList.new([k.upper().replace("_", " ") for k in keys]))
-            current = (audio_info.get("codec") or "sbc").lower().replace("-", "_")
             if current in keys:
                 self.codec_drop.set_selected(keys.index(current))
             elif 0 <= selected < len(keys):
                 self.codec_drop.set_selected(selected)
-        extra = []
-        if audio_info.get("codec"):
-            extra.append(str(audio_info["codec"]))
-        if status.get("device_codec"):
-            extra.append(f"device {status['device_codec']}")
-        if extra:
-            self.lbl_codec_hint.set_text(self.lbl_codec_hint.get_text() + "  ·  " + " / ".join(extra))
+        available = ", ".join(k.upper().replace("_", " ") for k in keys)
+        device_codec = str(status.get("device_codec") or "—").upper()
+        self.lbl_codec_hint.set_text(
+            f"{t('codec_hint')}  ·  {t('codec_host')} "
+            f"{current.upper() or '—'} / {t('codec_device')} {device_codec}  ·  {available}"
+        )
 
 
 class EarAApp(Adw.Application):

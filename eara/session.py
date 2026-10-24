@@ -22,6 +22,9 @@ from eara.protocol import (
     CMD_CUSTOM_EQ_GET,
     CMD_CUSTOM_EQ_SET,
     CMD_DEVICE_INFO,
+    CMD_DUAL_GET,
+    CMD_DUAL_LIST,
+    CMD_DUAL_SET,
     CMD_EAR_TIP,
     CMD_EAR_TIP_PREP,
     CMD_EAR_TIP_RESULT,
@@ -38,36 +41,51 @@ from eara.protocol import (
     CMD_LISTENING_SET,
     CMD_PERSONAL_ANC_GET,
     CMD_PERSONAL_ANC_SET,
+    CMD_PERSONAL_SOUND_GET,
+    CMD_PERSONAL_SOUND_SET,
+    CMD_PROTOCOL_VERSION,
     CMD_RING,
     CMD_RING_LEGACY,
+    CMD_SPATIAL_GET,
+    CMD_SPATIAL_SET,
     DIR_GET,
     DIR_RESPONSE,
     DIR_ACK,
     DIR_SET,
     EQ_PRESETS,
+    EQ_PRESETS_B175,
     GESTURE_ACTIONS,
     GESTURE_SIDES,
     GESTURE_TYPES,
+    HEADPHONE_GESTURE_ACTIONS,
+    HEADPHONE_GESTURE_SLOTS,
     LISTENING_MODES,
+    SPATIAL_MODES_B175,
     FrameParser,
     build_custom_eq_payload,
     build_frame,
     clamp_eq_gain,
     graphic_to_three,
     merge_gestures,
+    merge_headphone_gestures,
     merge_battery_cache,
     parse_anc,
     parse_bass,
     parse_battery,
     parse_custom_eq,
     parse_device_codec,
+    parse_dual_devices,
+    parse_dual_enabled,
     parse_ear_tip,
     parse_eq,
     parse_firmware,
     parse_gestures,
+    parse_headphone_gestures,
     parse_in_ear,
     parse_latency,
     parse_listening,
+    parse_personal_sound,
+    parse_spatial,
     three_to_graphic,
     parse_serial,
 )
@@ -82,6 +100,7 @@ class Device:
         self._parser = FrameParser()
         self._seq = 1
         self._battery_cache: dict[str, dict[str, object]] = {}
+        self._protocol_version: str | None = None
         self._lock = threading.RLock()
 
     @classmethod
@@ -153,8 +172,8 @@ class Device:
             "ok": False,
             "error": (
                 f"{err} (tried {attempts} times). "
-                "Take both buds out of the case, disable phone Bluetooth "
-                "(dual connection), then Connect or Reset again."
+                "Wake the device (earbuds out of the case / headphones powered on), "
+                "disable phone Bluetooth (dual connection), then Connect or Reset again."
             ),
             "attempt": attempts,
         }
@@ -208,11 +227,18 @@ class Device:
                         time.sleep(1.5 + attempt)
                 time.sleep(0.5)
             try:
-                self._sock = bluez.open_rfcomm(self.address)
+                self._sock = bluez.open_rfcomm(
+                    self.address,
+                    channels=self.model.rfcomm_channels,
+                )
             except OSError as exc:
                 raise RuntimeError(bluez.permission_hint(exc)) from exc
             self._parser = FrameParser()
-            if probe_device:
+            if self.model.protocol_version:
+                reply = self._request(CMD_PROTOCOL_VERSION, timeout=0.9)
+                if reply:
+                    self._protocol_version = parse_firmware(reply)
+            if probe_device and not self.model.single_battery:
                 self._request(CMD_DEVICE_INFO, DIR_GET)
 
     def close_control(self) -> None:
@@ -343,6 +369,11 @@ class Device:
             },
             "graphic_eq": None,
             "device_codec": None,
+            "protocol_version": None,
+            "spatial": None,
+            "personal_sound": None,
+            "dual_connection": None,
+            "dual_devices": [],
             "error": "",
         }
         if not self.connected:
@@ -352,21 +383,25 @@ class Device:
         except RuntimeError as exc:
             result["error"] = str(exc)
             return result
+        result["protocol_version"] = self._protocol_version
         try:
-            info = self._request(CMD_DEVICE_INFO)
-            if info is not None:
-                serial = parse_serial(info)
-                result["serial"] = serial or None
-                if serial:
-                    named = model_from_name(self.name)
-                    self.model = self._resolve_model(serial, named)
-                    result["model"] = self.model.as_dict()
+            if not self.model.single_battery:
+                info = self._request(CMD_DEVICE_INFO)
+                if info is not None:
+                    serial = parse_serial(info)
+                    result["serial"] = serial or None
+                    if serial:
+                        named = model_from_name(self.name)
+                        self.model = self._resolve_model(serial, named)
+                        result["model"] = self.model.as_dict()
             batt = self._request(CMD_BATTERY)
             if batt is not None:
                 result["protocol"] = True
                 battery = parse_battery(batt)
                 case = battery.get("case")
-                if not isinstance(case, dict) or not case.get("available"):
+                if not self.model.single_battery and (
+                    not isinstance(case, dict) or not case.get("available")
+                ):
                     time.sleep(0.7)
                     batt_retry = self._request(CMD_BATTERY, timeout=1.0)
                     if batt_retry is not None:
@@ -386,9 +421,12 @@ class Device:
                 if anc is not None:
                     result["anc"] = parse_anc(anc)
             if self.model.eq_presets:
-                eq = self._request(CMD_EQ_GET)
+                eq_command = (
+                    CMD_LISTENING_GET if self.model.eq_family == "listening" else CMD_EQ_GET
+                )
+                eq = self._request(eq_command)
                 if eq is not None:
-                    result["eq"] = parse_eq(eq)
+                    result["eq"] = parse_eq(eq, self.model.eq_family)
             if self.model.custom_eq:
                 ceq = self._request(CMD_CUSTOM_EQ_GET)
                 if ceq is not None:
@@ -398,7 +436,7 @@ class Device:
                         result["graphic_eq"] = three_to_graphic(ceq_vals[0], ceq_vals[1], ceq_vals[2])
             codec = self._request(CMD_CODEC_GET, timeout=0.45)
             if codec is not None:
-                result["device_codec"] = parse_device_codec(codec)
+                result["device_codec"] = parse_device_codec(codec, self.model.codec_zero)
             if self.model.advanced_eq:
                 adv = self._request(CMD_ADVANCED_EQ_GET)
                 if adv is not None and adv:
@@ -426,12 +464,31 @@ class Device:
             fw = self._request(CMD_FIRMWARE)
             if fw is not None:
                 result["firmware"] = parse_firmware(fw)
+            if self.model.spatial_audio:
+                spatial = self._request(CMD_SPATIAL_GET, timeout=0.6)
+                if spatial is not None:
+                    result["spatial"] = parse_spatial(spatial, self.model.spatial_modes)
+            if self.model.personal_sound:
+                personal = self._request(CMD_PERSONAL_SOUND_GET, timeout=0.6)
+                if personal is not None:
+                    result["personal_sound"] = parse_personal_sound(personal)
+            if self.model.dual_connection:
+                dual = self._request(CMD_DUAL_GET, timeout=0.6)
+                if dual is not None:
+                    result["dual_connection"] = parse_dual_enabled(dual)
+                peers = self._request(CMD_DUAL_LIST, DIR_GET, b"\x00", timeout=0.6)
+                if peers is not None:
+                    result["dual_devices"] = parse_dual_devices(peers)
             if self.model.gestures:
                 g = self._request(CMD_GESTURE_GET)
-                if g is not None:
-                    result["gestures"] = merge_gestures(parse_gestures(g))
+                if self.model.gesture_profile == "headphone":
+                    result["gestures"] = merge_headphone_gestures(
+                        parse_headphone_gestures(g or b"")
+                    )
                 else:
-                    result["gestures"] = merge_gestures({"left": {}, "right": {}})
+                    result["gestures"] = merge_gestures(
+                        parse_gestures(g) if g is not None else {"left": {}, "right": {}}
+                    )
         finally:
             self.close_control()
         return result
@@ -444,11 +501,17 @@ class Device:
             self._request(CMD_ANC_SET, DIR_SET, payload, require=True)
             time.sleep(0.2)
 
+    @property
+    def _eq_table(self) -> dict[str, int]:
+        return EQ_PRESETS_B175 if self.model.eq_family == "listening" else EQ_PRESETS
+
     def set_eq(self, preset: str) -> None:
-        if preset not in EQ_PRESETS:
+        table = self._eq_table
+        if preset not in table:
             raise ValueError(f"Unknown EQ preset: {preset}")
+        command = CMD_LISTENING_SET if self.model.eq_family == "listening" else CMD_EQ_SET
         with self._session():
-            self._request(CMD_EQ_SET, DIR_SET, bytes([EQ_PRESETS[preset], 0]), require=True)
+            self._request(command, DIR_SET, bytes([table[preset], 0]), require=True)
             time.sleep(0.2)
 
     def set_custom_eq(self, bass: float, mid: float, treble: float) -> None:
@@ -456,7 +519,16 @@ class Device:
         mid = clamp_eq_gain(mid)
         treble = clamp_eq_gain(treble)
         with self._session():
-            payload = build_custom_eq_payload(bass, mid, treble)
+            if self.model.eq_family == "listening":
+                self._request(
+                    CMD_LISTENING_SET,
+                    DIR_SET,
+                    bytes([EQ_PRESETS_B175["custom"], 0]),
+                    timeout=0.6,
+                )
+            payload = build_custom_eq_payload(
+                bass, mid, treble, self.model.custom_eq_peak_q
+            )
             self._request(CMD_CUSTOM_EQ_SET, DIR_SET, payload, require=True)
             time.sleep(0.2)
 
@@ -464,11 +536,21 @@ class Device:
         clamped = [clamp_eq_gain(g) for g in gains]
         bass, mid, treble = graphic_to_three(clamped)
         with self._session():
-            self._request(CMD_ADVANCED_EQ_SET, DIR_SET, bytes([1, 0]), require=True)
+            if self.model.eq_family == "listening":
+                self._request(
+                    CMD_LISTENING_SET,
+                    DIR_SET,
+                    bytes([EQ_PRESETS_B175["custom"], 0]),
+                    timeout=0.6,
+                )
+            else:
+                self._request(CMD_ADVANCED_EQ_SET, DIR_SET, bytes([1, 0]), require=True)
             self._request(
                 CMD_CUSTOM_EQ_SET,
                 DIR_SET,
-                build_custom_eq_payload(bass, mid, treble),
+                build_custom_eq_payload(
+                    bass, mid, treble, self.model.custom_eq_peak_q
+                ),
                 require=True,
             )
             time.sleep(0.2)
@@ -477,8 +559,13 @@ class Device:
         from eara.protocol import CODEC_FROM_NAME
 
         host = audio.set_host_codec(self.address, name)
-        code = CODEC_FROM_NAME.get(name.lower().replace("-", "_"))
-        if code is not None:
+        key = name.lower().replace("-", "_")
+        device_codes = dict(CODEC_FROM_NAME)
+        if self.model.codec_zero == "aac":
+            device_codes["aac"] = 0
+        supported = key in self.model.device_codecs if self.model.device_codecs else key in device_codes
+        code = device_codes.get(key)
+        if code is not None and supported:
             try:
                 with self._session():
                     self._request(CMD_CODEC_GET, DIR_SET, bytes([code]), require=True)
@@ -488,10 +575,14 @@ class Device:
         return host
 
     def set_advanced_eq(self, enabled: bool) -> None:
+        if not self.model.advanced_eq:
+            raise RuntimeError("Advanced EQ is not supported on this model.")
         with self._session():
             self._request(CMD_ADVANCED_EQ_SET, DIR_SET, bytes([1 if enabled else 0, 0]), require=True)
 
     def set_bass(self, enabled: bool, level: float = 1.0) -> None:
+        if not self.model.bass_enhance:
+            raise RuntimeError("Bass enhance is not supported on this model.")
         with self._session():
             wire_level = int(max(0, min(5, level)) * 2)
             self._request(CMD_BASS_SET, DIR_SET, bytes([1 if enabled else 0, wire_level]), require=True)
@@ -502,14 +593,20 @@ class Device:
             time.sleep(0.2)
 
     def set_in_ear_detection(self, enabled: bool) -> None:
+        if not self.model.in_ear:
+            raise RuntimeError("In-ear detection is not supported on this model.")
         with self._session():
             self._request(CMD_IED_SET, DIR_SET, bytes([1, 1, 1 if enabled else 0]), require=True)
 
     def set_personalized_anc(self, enabled: bool) -> None:
+        if not self.model.personalized_anc:
+            raise RuntimeError("Personalized ANC is not supported on this model.")
         with self._session():
             self._request(CMD_PERSONAL_ANC_SET, DIR_SET, bytes([1 if enabled else 0]), require=True)
 
     def set_listening_mode(self, mode: str) -> None:
+        if not self.model.listening_mode:
+            raise RuntimeError("Listening mode is not supported on this model.")
         if mode not in LISTENING_MODES:
             raise ValueError(f"Unknown listening mode: {mode}")
         with self._session():
@@ -520,10 +617,52 @@ class Device:
                 require=True,
             )
 
-    def set_gesture(self, side: str, gtype: str, action: str) -> None:
-        if side not in GESTURE_SIDES or gtype not in GESTURE_TYPES or action not in GESTURE_ACTIONS:
-            raise ValueError("Invalid gesture (side|type|action)")
+    def set_spatial_audio(self, mode: str) -> None:
+        if not self.model.spatial_audio or mode not in self.model.spatial_modes:
+            raise ValueError(f"Unknown spatial audio mode: {mode}")
         with self._session():
+            self._request(
+                CMD_SPATIAL_SET,
+                DIR_SET,
+                bytes(SPATIAL_MODES_B175[mode]),
+                require=True,
+            )
+
+    def set_personal_sound(self, enabled: bool) -> None:
+        if not self.model.personal_sound:
+            raise RuntimeError("Personal sound is not supported on this model.")
+        with self._session():
+            self._request(
+                CMD_PERSONAL_SOUND_SET,
+                DIR_SET,
+                bytes([1 if enabled else 0]),
+                require=True,
+            )
+
+    def set_dual_connection(self, enabled: bool) -> None:
+        if not self.model.dual_connection:
+            raise RuntimeError("Dual connection is not supported on this model.")
+        with self._session():
+            self._request(CMD_DUAL_SET, DIR_SET, bytes([1 if enabled else 0]), require=True)
+            time.sleep(0.3)
+
+    def set_gesture(self, side: str, gtype: str, action: str) -> None:
+        if self.model.gesture_profile == "headphone":
+            spec = HEADPHONE_GESTURE_SLOTS.get(gtype)
+            if side != "controls" or spec is None or action not in spec["actions"]:
+                raise ValueError("Invalid headphone control (controls|slot|action)")
+            payload = bytes(
+                [
+                    0x01,
+                    self.model.gesture_device,
+                    int(spec["button"]),
+                    int(spec["gesture"]),
+                    HEADPHONE_GESTURE_ACTIONS[action],
+                ]
+            )
+        else:
+            if side not in GESTURE_SIDES or gtype not in GESTURE_TYPES or action not in GESTURE_ACTIONS:
+                raise ValueError("Invalid gesture (side|type|action)")
             payload = bytes(
                 [
                     0x01,
@@ -533,6 +672,7 @@ class Device:
                     GESTURE_ACTIONS[action],
                 ]
             )
+        with self._session():
             self._request(CMD_GESTURE_SET, DIR_SET, payload, require=True)
 
     def ear_tip_test(self) -> dict[str, str]:
@@ -568,6 +708,11 @@ class Device:
             raise ValueError("which must be left|right|both|off")
         side, ring = mapping[which]
         with self._session():
+            if self.model.ring_form == "headphone":
+                on = 0 if which == "off" else 1
+                for headphone_side in (0x06, 0x02):
+                    if self._request(CMD_RING, DIR_SET, bytes([headphone_side, on])) is not None:
+                        return
             if self._request(CMD_RING, DIR_SET, bytes([side, ring])) is None:
                 self._request(
                     CMD_RING_LEGACY,

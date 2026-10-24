@@ -7,7 +7,18 @@ import json
 import sys
 
 from eara import __version__, audio
-from eara.protocol import ANC_MODES, EQ_PRESETS, GESTURE_ACTIONS, GESTURE_SIDES, GESTURE_TYPES, LISTENING_MODES
+from eara.protocol import (
+    ANC_MODES,
+    EQ_PRESETS,
+    EQ_PRESETS_B175,
+    GESTURE_ACTIONS,
+    GESTURE_SIDES,
+    GESTURE_TYPES,
+    HEADPHONE_GESTURE_ACTIONS,
+    HEADPHONE_GESTURE_SLOTS,
+    LISTENING_MODES,
+    SPATIAL_MODES_B175,
+)
 from eara.session import Device
 
 
@@ -38,11 +49,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     print(f"ANC:       {status.get('anc') or '—'}")
     print(f"EQ:        {status.get('eq') or '—'}")
     batt = status.get("battery") or {}
-    for key in ("left", "right", "case"):
+    for key in ("left", "right", "case", "headset"):
         item = batt.get(key)
         if isinstance(item, dict) and item.get("available"):
             ch = " charging" if item.get("charging") else ""
-            print(f"Battery {key}: {item['level']}%{ch}")
+            label = "Battery" if key == "headset" else f"Battery {key}"
+            print(f"{label}: {item['level']}%{ch}")
     if status.get("latency") is not None:
         print(f"Latency:   {'on' if status['latency'] else 'off'}")
     if status.get("in_ear") is not None:
@@ -55,9 +67,17 @@ def cmd_status(args: argparse.Namespace) -> int:
     if audio_info.get("codec"):
         print(f"Host codec:{audio_info['codec']}")
     if status.get("device_codec"):
-        print(f"Buds codec:{status['device_codec']}")
+        print(f"Device codec:{status['device_codec']}")
+    if status.get("protocol_version"):
+        print(f"Protocol ver:{status['protocol_version']}")
     if status.get("listening"):
         print(f"Listening: {status['listening']}")
+    if status.get("spatial"):
+        print(f"Spatial:   {status['spatial']}")
+    if status.get("personal_sound") is not None:
+        print(f"Personal sound: {'on' if status['personal_sound'] else 'off'}")
+    if status.get("dual_connection") is not None:
+        print(f"Dual connection: {'on' if status['dual_connection'] else 'off'}")
     if status.get("personalized_anc") is not None:
         print(f"Personal ANC: {'on' if status['personalized_anc'] else 'off'}")
     if status.get("error"):
@@ -154,6 +174,28 @@ def cmd_listening(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_spatial(args: argparse.Namespace) -> int:
+    _device(args).set_spatial_audio(args.mode)
+    print(f"Spatial audio → {args.mode}")
+    return 0
+
+
+def cmd_personal_sound(args: argparse.Namespace) -> int:
+    _device(args).set_personal_sound(args.state == "on")
+    print(f"Personal sound → {args.state}")
+    return 0
+
+
+def cmd_dual(args: argparse.Namespace) -> int:
+    ear = _device(args)
+    if args.state == "list":
+        print(json.dumps(ear.status().get("dual_devices") or [], ensure_ascii=False, indent=2))
+        return 0
+    ear.set_dual_connection(args.state == "on")
+    print(f"Dual connection → {args.state}")
+    return 0
+
+
 def cmd_ring(args: argparse.Namespace) -> int:
     _device(args).ring(args.which)
     print(f"Ring → {args.which}")
@@ -225,7 +267,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="eara",
-        description="Unofficial Linux companion for compatible True Wireless earbuds",
+        description="Unofficial Linux companion for compatible Nothing / CMF earbuds and headphones",
     )
     p.add_argument("--device", default="", help="Bluetooth address or name")
     p.add_argument("--json", action="store_true")
@@ -244,7 +286,7 @@ def build_parser() -> argparse.ArgumentParser:
     a.set_defaults(func=cmd_anc)
 
     e = sub.add_parser("eq")
-    e.add_argument("preset", choices=sorted(EQ_PRESETS))
+    e.add_argument("preset", choices=sorted(set(EQ_PRESETS) | set(EQ_PRESETS_B175)))
     e.set_defaults(func=cmd_eq)
 
     ce = sub.add_parser("custom-eq")
@@ -280,10 +322,22 @@ def build_parser() -> argparse.ArgumentParser:
     lm.add_argument("mode", choices=sorted(LISTENING_MODES))
     lm.set_defaults(func=cmd_listening)
 
+    sp = sub.add_parser("spatial")
+    sp.add_argument("mode", choices=sorted(SPATIAL_MODES_B175))
+    sp.set_defaults(func=cmd_spatial)
+
+    ps = sub.add_parser("personal-sound")
+    ps.add_argument("state", choices=["on", "off"])
+    ps.set_defaults(func=cmd_personal_sound)
+
+    dc = sub.add_parser("dual")
+    dc.add_argument("state", choices=["on", "off", "list"])
+    dc.set_defaults(func=cmd_dual)
+
     g = sub.add_parser("gesture")
-    g.add_argument("side", choices=sorted(GESTURE_SIDES))
-    g.add_argument("type", choices=sorted(GESTURE_TYPES))
-    g.add_argument("action", choices=sorted(GESTURE_ACTIONS))
+    g.add_argument("side", choices=sorted(set(GESTURE_SIDES) | {"controls"}))
+    g.add_argument("type", choices=sorted(set(GESTURE_TYPES) | set(HEADPHONE_GESTURE_SLOTS)))
+    g.add_argument("action", choices=sorted(set(GESTURE_ACTIONS) | set(HEADPHONE_GESTURE_ACTIONS)))
     g.set_defaults(func=cmd_gesture)
 
     r = sub.add_parser("ring")

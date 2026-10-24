@@ -1,12 +1,12 @@
 [project]
 name = "eara"
-version = "0.3.3"
-description = "Unofficial Linux companion for compatible True Wireless earbuds"
+version = "0.4.0"
+description = "Unofficial Linux companion for compatible Nothing / CMF earbuds and headphones"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "oneydef", email = "oneydefwork@gmail.com" }]
-keywords = ["nothing", "nothing-x", "nothing-earbuds", "cmf", "earbuds", "bluetooth", "linux", "gtk4", "flatpak", "pipewire", "bluez", "anc"]
+keywords = ["nothing", "nothing-x", "nothing-earbuds", "nothing-headphones", "cmf", "earbuds", "headphones", "bluetooth", "linux", "gtk4", "flatpak", "pipewire", "bluez", "anc"]
 classifiers = [
   "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
   "Operating System :: POSIX :: Linux",

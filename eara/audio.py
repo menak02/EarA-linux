@@ -214,7 +214,7 @@ def ensure_music_audio(address: str) -> dict[str, object]:
             "error": (
                 "PulseAudio did not create a Bluetooth card. "
                 "Disconnect the phone (dual connection can steal A2DP), "
-                "take both earbuds out of the case, then try again."
+                "wake the earbuds/headphones, then try again."
             ),
         }
     for profile in ("a2dp_sink", "a2dp-sink", "a2dp_sink.sbc"):

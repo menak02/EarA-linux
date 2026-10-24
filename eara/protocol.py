@@ -19,6 +19,7 @@ RFCOMM_CHANNEL = 15
 NT_LINK_UUID = "aeac4a03-dff5-498f-843a-34487cf133eb"
 FAST_PAIR_UUID = "df21fe2c-2515-4fdb-8886-f12c4d67927c"
 
+CMD_PROTOCOL_VERSION = 0x01
 CMD_DEVICE_INFO = 0x06
 CMD_BATTERY = 0x07
 CMD_IED_GET = 0x0E
@@ -48,6 +49,14 @@ CMD_LISTENING_SET = 0x1D
 CMD_PERSONAL_ANC_GET = 0x20
 CMD_PERSONAL_ANC_SET = 0x11
 CMD_CODEC_GET = 0x29
+CMD_SPATIAL_GET = 0x4F  # GET dir; 0xF04F is the earbud advanced-EQ switch
+CMD_SPATIAL_SET = 0x52
+CMD_PERSONAL_SOUND_GET = 0x5A
+CMD_PERSONAL_SOUND_SET = 0x5C
+CMD_DUAL_GET = 0x27
+CMD_DUAL_SET = 0x1A
+CMD_DUAL_LIST = 0x28
+CMD_DUAL_CONNECT = 0x1B
 
 DIR_GET = 0xC0
 DIR_SET = 0xF0
@@ -75,6 +84,19 @@ EQ_PRESETS = {
 
 EQ_FROM_WIRE = {v: k for k, v in EQ_PRESETS.items()}
 
+# CMF Headphone Pro (B175) routes EQ through the listening-mode commands.
+EQ_PRESETS_B175 = {
+    "dirac": 0,
+    "rock": 1,
+    "electronic": 2,
+    "pop": 3,
+    "vocals": 4,
+    "classical": 5,
+    "custom": 6,
+}
+
+EQ_FROM_WIRE_B175 = {v: k for k, v in EQ_PRESETS_B175.items()}
+
 # Gesture action bytes (same encoding as Nothing X / ear-web).
 GESTURE_ACTIONS = {
     "no-action": 0x01,
@@ -99,6 +121,91 @@ GESTURE_TYPES = {
 GESTURE_SIDES = {"left": 0x02, "right": 0x03}
 
 ACTION_FROM_WIRE = {value: key for key, value in GESTURE_ACTIONS.items()}
+
+# Over-ear controls: device id 6, with button/gesture slots instead of pinch.
+HEADPHONE_GESTURE_ACTIONS = {
+    "no-action": 0x01,
+    "voice-assistant": 0x0B,
+    "noise-control-cycle": 0x0A,
+    "noise-control-off-anc": 0x14,
+    "noise-control-trans-off": 0x15,
+    "noise-control-trans-anc": 0x16,
+    "spatial-audio": 0x1B,
+    "mic-toggle": 0x1D,
+    "essential-news": 0x1F,
+    "essential-space": 0x21,
+    "bass-tuning": 0x23,
+    "treble-tuning": 0x24,
+}
+
+HEADPHONE_ACTION_FROM_WIRE = {value: key for key, value in HEADPHONE_GESTURE_ACTIONS.items()}
+
+_NOISE_CYCLE = (
+    "noise-control-cycle",
+    "noise-control-off-anc",
+    "noise-control-trans-off",
+    "noise-control-trans-anc",
+)
+
+# slot → (button code, gesture code, allowed actions)
+HEADPHONE_GESTURE_SLOTS: dict[str, dict[str, object]] = {
+    "button-single": {
+        "label": "gesture_button_single",
+        "button": 10,
+        "gesture": 1,
+        "actions": (
+            "no-action",
+            "voice-assistant",
+            "essential-news",
+            "spatial-audio",
+            "mic-toggle",
+        )
+        + _NOISE_CYCLE,
+    },
+    "button-hold": {
+        "label": "gesture_button_hold",
+        "button": 10,
+        "gesture": 7,
+        "actions": (
+            "no-action",
+            "voice-assistant",
+            "essential-news",
+            "essential-space",
+            "spatial-audio",
+            "mic-toggle",
+        )
+        + _NOISE_CYCLE,
+    },
+    "energy-slider": {
+        "label": "gesture_energy_slider",
+        "button": 5,
+        "gesture": 1,
+        "actions": ("bass-tuning", "treble-tuning"),
+    },
+    "roller-hold": {
+        "label": "gesture_roller_hold",
+        "button": 1,
+        "gesture": 7,
+        "actions": _NOISE_CYCLE,
+    },
+}
+
+_HEADPHONE_SLOT_BY_WIRE = {
+    (int(spec["button"]), int(spec["gesture"])): slot
+    for slot, spec in HEADPHONE_GESTURE_SLOTS.items()
+}
+
+DEFAULT_HEADPHONE_GESTURES: dict[str, dict[str, str]] = {
+    "controls": {
+        "button-single": "voice-assistant",
+        "button-hold": "no-action",
+        "energy-slider": "bass-tuning",
+        "roller-hold": "noise-control-trans-anc",
+    }
+}
+
+SPATIAL_MODES_B175 = {"off": (0, 0), "concert": (2, 0), "theatre": (3, 0)}
+SPATIAL_FROM_WIRE_B175 = {wire: name for name, wire in SPATIAL_MODES_B175.items()}
 
 # GET 0x18 response layout (Ear 2 / Ear (a) / Ear 3 family).
 GESTURE_READ_OFFSETS: dict[tuple[str, str], int] = {
@@ -286,10 +393,11 @@ def parse_serial(payload: bytes) -> str:
     return serial
 
 
-def parse_eq(payload: bytes) -> Optional[str]:
+def parse_eq(payload: bytes, family: str = "earbud") -> Optional[str]:
     if not payload:
         return None
-    return EQ_FROM_WIRE.get(payload[0], f"unknown-{payload[0]}")
+    table = EQ_FROM_WIRE_B175 if family == "listening" else EQ_FROM_WIRE
+    return table.get(payload[0], f"unknown-{payload[0]}")
 
 
 def parse_in_ear(payload: bytes) -> Optional[bool]:
@@ -310,6 +418,94 @@ def parse_bass(payload: bytes) -> dict[str, object]:
     if len(payload) < 2:
         return {"enabled": False, "level": 0}
     return {"enabled": bool(payload[0]), "level": payload[1] / 2.0}
+
+
+def headphone_gesture_slot(wire: int, button: int) -> Optional[str]:
+    for (btn, gesture), slot in _HEADPHONE_SLOT_BY_WIRE.items():
+        if btn == button and gesture == wire:
+            return slot
+    return None
+
+
+def parse_headphone_gestures(payload: bytes) -> dict[str, dict[str, str]]:
+    """Decode B175 key config: count, then (device, button, gesture, action)."""
+    out: dict[str, dict[str, str]] = {"controls": {}}
+    if not payload:
+        return out
+    count = payload[0]
+    for i in range(count):
+        off = 1 + i * 4
+        if off + 3 >= len(payload):
+            break
+        button, gesture, action_wire = payload[off + 1], payload[off + 2], payload[off + 3]
+        slot = headphone_gesture_slot(gesture, button)
+        action = HEADPHONE_ACTION_FROM_WIRE.get(action_wire)
+        if slot and action:
+            out["controls"][slot] = action
+    return out
+
+
+def merge_headphone_gestures(
+    parsed: dict[str, dict[str, str]],
+    defaults: dict[str, dict[str, str]] | None = None,
+) -> dict[str, dict[str, str]]:
+    base = defaults or DEFAULT_HEADPHONE_GESTURES
+    merged = {"controls": dict(base.get("controls", {}))}
+    for slot, action in (parsed.get("controls") or {}).items():
+        if action and not str(action).startswith("unknown"):
+            merged["controls"][slot] = action
+    for slot, spec in HEADPHONE_GESTURE_SLOTS.items():
+        merged["controls"].setdefault(slot, "no-action")
+    return merged
+
+
+def parse_spatial(payload: bytes, modes: tuple[str, ...] = ()) -> Optional[str]:
+    if not payload:
+        return None
+    wire = (payload[0], payload[1] if len(payload) > 1 else 0)
+    name = SPATIAL_FROM_WIRE_B175.get(wire)
+    if name and (not modes or name in modes):
+        return name
+    return f"mode-{payload[0]}"
+
+
+def parse_personal_sound(payload: bytes) -> Optional[bool]:
+    if not payload:
+        return None
+    return bool(payload[0])
+
+
+def parse_dual_enabled(payload: bytes) -> Optional[bool]:
+    if not payload:
+        return None
+    return bool(payload[0])
+
+
+def parse_dual_devices(payload: bytes) -> list[dict[str, object]]:
+    """Dual-connection peer list: flags, 6-byte MAC, name length + UTF-8 name."""
+    if len(payload) < 3:
+        return []
+    count = payload[2]
+    out: list[dict[str, object]] = []
+    off = 3
+    for _ in range(count):
+        if off + 8 > len(payload):
+            break
+        flags = payload[off]
+        mac_bytes = payload[off + 1 : off + 7]
+        name_len = payload[off + 7] & 0x7F
+        name_start = off + 8
+        name = payload[name_start : name_start + name_len].decode("utf-8", errors="ignore")
+        out.append(
+            {
+                "mac": ":".join(f"{byte:02X}" for byte in mac_bytes),
+                "name": name,
+                "connected": bool(flags & 0x0F),
+                "this_device": bool(flags & 0xF0),
+            }
+        )
+        off = name_start + name_len
+    return out
 
 
 def parse_gestures(payload: bytes) -> dict[str, dict[str, str]]:
@@ -404,7 +600,12 @@ def decode_eq_float(raw: bytes) -> float:
     return struct.unpack(">f", bytes(array))[0]
 
 
-def build_custom_eq_payload(bass: float, mid: float, treble: float) -> bytes:
+def build_custom_eq_payload(
+    bass: float,
+    mid: float,
+    treble: float,
+    peak_q: float = 0.66,
+) -> bytes:
     """3-band custom EQ as used by ear-web (bass/mid/treble in dB-ish floats)."""
     level = [mid, treble, bass]
     highest = max(level) / -1 if level else 0.0
@@ -423,6 +624,7 @@ def build_custom_eq_payload(bass: float, mid: float, treble: float) -> bytes:
         encoded = encode_eq_float(val, total=False)
         start = 6 + k * 13
         buf[start : start + 4] = encoded
+    buf[14:18] = encode_eq_float(peak_q)
     return bytes(buf)
 
 
@@ -463,10 +665,11 @@ def three_to_graphic(bass: float, mid: float, treble: float) -> list[float]:
     return out
 
 
-def parse_device_codec(payload: bytes) -> str:
+def parse_device_codec(payload: bytes, zero: str = "sbc") -> str:
     if not payload:
         return "unknown"
-    return DEVICE_CODECS.get(payload[0], f"code-{payload[0]}")
+    table = {**DEVICE_CODECS, 0: zero}
+    return table.get(payload[0], f"code-{payload[0]}")
 
 
 LISTENING_MODES = {"normal": 0, "entertainment": 1, "work": 2}

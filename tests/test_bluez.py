@@ -16,6 +16,14 @@ class BluezTests(unittest.TestCase):
         self.assertIsNotNone(found)
         self.assertEqual(found["address"], "AA:BB:CC:DD:EE:FF")
 
+    def test_cmf_headphone_is_recognized(self):
+        self.assertTrue(bluez.looks_like_nothing("CMF Headphone Pro"))
+        paired = [{"address": "AA:BB:CC:DD:EE:FF", "name": "CMF Headphone Pro"}]
+        with patch.object(bluez, "paired_devices", return_value=paired):
+            found = bluez.find_nothing_device()
+        self.assertIsNotNone(found)
+        self.assertEqual(found["name"], "CMF Headphone Pro")
+
     def test_trust_and_connect_requires_pairing(self):
         with patch.object(bluez, "_is_paired", return_value=False):
             with self.assertRaises(RuntimeError):

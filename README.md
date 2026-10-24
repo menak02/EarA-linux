@@ -2,7 +2,7 @@
 
 <img src="docs/github-banner.svg" alt="EarA for Linux" width="720"/>
 
-**Unofficial GTK companion for Nothing / CMF earbuds on Linux**
+**Unofficial GTK companion for Nothing / CMF earbuds and headphones on Linux**
 
 BlueZ · PulseAudio / PipeWire · RFCOMM control · CLI + GUI
 
@@ -20,7 +20,7 @@ BlueZ · PulseAudio / PipeWire · RFCOMM control · CLI + GUI
 
 > Independent community project — **not** affiliated with Nothing Technology or CMF.
 
-EarA brings battery, ANC, EQ, gestures, find-my, and Bluetooth audio routing to Linux desktops. Tested with **Nothing Ear (a)**; other Nothing / CMF models use the same protocol family ([LINEUP.md](LINEUP.md)).
+EarA brings battery, ANC, EQ, gestures, find-my, spatial audio, personal sound, dual-connection management, and Bluetooth audio routing to Linux desktops. Tested with **Nothing Ear (a)** and **CMF Headphone Pro (B175)**; other Nothing / CMF models use the same protocol family ([LINEUP.md](LINEUP.md)).
 
 **[Try the interactive demo →](https://oneydef.github.io/EarA-linux/)**
 
@@ -38,6 +38,11 @@ EarA brings battery, ANC, EQ, gestures, find-my, and Bluetooth audio routing to 
 | Optional HFP mic (`eara audio hfp`) | ANC + transparency | Find my earbuds |
 | Host codec list (LHDC if adapter supports) | EQ presets + 8-band UI | Ear-tip fit test |
 | | Bass / latency / in-ear | |
+
+**CMF Headphone Pro (B175):** single headset battery, all six ANC modes, Rock /
+Electronic / Pop / Vocals / Classical presets + custom EQ, spatial audio
+(Concert / Theatre), Audiodo personal-sound toggle, dual-connection management,
+AAC / LDAC, button + energy-slider + roller remapping, and find-my.
 
 ## Install
 
@@ -71,7 +76,10 @@ eara anc transparency
 eara eq more_bass
 eara graphic-eq 0 0 0 0 0 0 0 0
 eara audio mic          # Discord — same A2DP as music
-eara audio hfp          # bud microphone (lower quality)
+eara audio hfp          # mic (lower quality)
+eara spatial concert    # CMF Headphone Pro
+eara personal-sound on  # Audiodo
+eara dual list          # paired hosts
 eara ring both
 eara doctor
 ```
@@ -88,7 +96,9 @@ EarA is free community software. If it saves you time on Linux:
 
 ## Protocol
 
-RFCOMM ch. 15 · UUID `aeac4a03-dff5-498f-843a-34487cf133eb` · frames `55 60 01 | cmd | dir | len | seq | payload | CRC-16/ARC`.
+UUID `aeac4a03-dff5-498f-843a-34487cf133eb` · RFCOMM ch. 15 (earbuds) or ch. 28
+(CMF Headphone Pro, with a `0xC001` activation handshake) · frames
+`55 60 01 | cmd | dir | len | seq | payload | CRC-16/ARC`.
 
 ## License
 
