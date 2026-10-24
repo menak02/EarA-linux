@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>eara.desktop</id>
   <name>Nothing X; Nothing Ears</name>
-  <summary>Unofficial Linux companion for Nothing / CMF earbuds</summary>
+  <summary>Unofficial Linux companion for Nothing / CMF earbuds and headphones</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <developer_name>oneydef</developer_name>
@@ -14,16 +14,18 @@
   <description>
     <p>
       EarA brings the missing Nothing X / Nothing Ears desktop experience to Linux:
-      battery (left, right, case), ANC, EQ, gestures, find-my, and ear-tip fit test.
+      battery, ANC, EQ, gestures, find-my, spatial audio, personal sound,
+      dual-connection management, and ear-tip fit test.
     </p>
     <p>
       GTK4 / libadwaita GUI plus CLI. Uses BlueZ RFCOMM — the same protocol family as
-      community Ear (web). Tested with Nothing Ear (a); other Nothing and CMF models
-      are best-effort.
+      community Ear (web). Tested with Nothing Ear (a) and CMF Headphone Pro (B175);
+      other Nothing and CMF models are best-effort.
     </p>
     <p xml:lang="uk">
       EarA — неофіційний Linux-компаньйон для навушників Nothing / CMF: батарея,
-      ANC, EQ, жести, find-my та тест амбушюр.
+      ANC, EQ, жести, find-my, просторовий звук, персональний звук, подвійне
+      з’єднання та тест амбушюр.
     </p>
     <p>
       Independent community project — <em>not</em> affiliated with Nothing Technology
@@ -51,6 +53,9 @@
     <keyword>Nothing Ears</keyword>
     <keyword>CMF</keyword>
     <keyword>earbuds</keyword>
+    <keyword>headphones</keyword>
+    <keyword>Nothing Headphone</keyword>
+    <keyword>CMF Headphone Pro</keyword>
     <keyword>bluetooth</keyword>
     <keyword>ANC</keyword>
     <keyword>EQ</keyword>
@@ -58,6 +63,11 @@
   </keywords>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.4.0" date="2026-10-24">
+      <description>
+        <p>Add CMF Headphone Pro (B175): single battery, spatial audio, Audiodo personal sound, dual connection, headphone controls and channel 28 transport.</p>
+      </description>
+    </release>
     <release version="0.3.3" date="2026-08-31">
       <description>
         <p>Fix install path in docs, optional power-off Bluetooth on exit.</p>
